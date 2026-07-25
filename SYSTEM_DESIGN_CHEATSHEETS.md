@@ -110,12 +110,15 @@ Note: real-time complicates horizontal scaling (sticky connections + need pub-su
 
 ---
 
-## 12. Saga Pattern
-**Skip if:** transaction fits in one DB — just use normal ACID transaction.
-**Need if:** transaction spans multiple services/DBs, no shared lock possible.
-- **Choreography**: no coordinator, services react to events, compensate on failure events. Good for few steps, max decoupling → order→payment→shipping chain
-- **Orchestration**: central coordinator drives steps + compensations explicitly. Good for many steps/complex branching → travel booking (flight+hotel+car)
-- Pair with **transactional outbox** to reliably emit events atomically with DB writes.
+## 12. Distributed Transactions
+**Skip if:** everything touched lives in one DB — normal local transaction handles it → transfer between two accounts at the same bank.
+**Also skip if:** strict all-or-nothing isn't required — idempotent retries + background reconciliation is simpler than any formal pattern.
+**Need if:** operation spans multiple independently-owned services/DBs and needs all-or-nothing (or a guaranteed consistent end state).
+- **2PC (two-phase commit)**: coordinator has every participant prepare/lock, commits only once all confirm. Strong immediate atomicity, but blocking (locks held throughout), coordinator=SPOF, doesn't scale, requires all participants to support the protocol → distributed DBs / XA transactions inside one company's infra.
+- **Saga**: no locks — eventual consistency via compensating actions; choreography (event-driven, few steps, max decoupling) or orchestration (central coordinator, complex branching). Default modern choice — works across external/untrusted systems → cross-bank transfer, order→payment→shipping chain.
+- **TCC (try-confirm-cancel)**: stricter saga variant — explicit try (tentative reserve), confirm (finalize), cancel (release hold) per service. Clearer semantics than ad hoc saga compensation → travel booking, hold seat/funds then confirm or release.
+- **Eventual consistency + reconciliation**: each step runs independently with idempotency keys; background job fixes drift later. Simplest option, good when real-time strict correctness isn't required → updating analytics/search index after an order.
+- Pair Saga with **transactional outbox** to reliably emit events atomically with DB writes.
 
 ---
 

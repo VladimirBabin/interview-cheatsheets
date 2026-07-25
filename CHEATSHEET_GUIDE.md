@@ -1,6 +1,6 @@
 # How to Write a System Design Cheat Sheet
 
-Instructions for building entries like the ones in `SYSTEM_DESIGN_CHEATSHEETS.md`. Each entry covers one concept/topic (e.g. "Caching", "Sharding", "Saga Pattern").
+Instructions for building entries like the ones in `SYSTEM_DESIGN_CHEATSHEETS.md`. Each entry covers one concept/topic (e.g. "Caching", "Sharding", "Distributed Transactions").
 
 ## Core constraint: readable in under 1 minute
 
