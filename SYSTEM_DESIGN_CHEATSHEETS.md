@@ -11,11 +11,14 @@ Decision test: do you need joins/multi-row ACID across entities (→ relational)
 
 ## 2. NoSQL Database Types
 Pick by dominant access pattern — each trades relational flexibility (joins, ad hoc queries) for one specific strength.
-- **Document (MongoDB, Firestore)**: schema flexible/varies per record, nested data fetched in one read, no joins needed → user profiles, product catalogs
-- **Key-Value (Redis, DynamoDB)**: O(1) lookup by key, simplest model, fastest → caching, sessions
+- **Document (MongoDB, Firestore, CouchDb, AmazonDynamoDb )**: schema flexible/varies per record, nested data fetched in a single read, no joins needed → user profiles, product catalogs (xml, yaml, json, bson)
+- **Key-Value (Redis, DynamoDB, Memcached)**: O(1) lookup by key, simplest model, fastest → caching, sessions
 - **Columnar (Redshift, BigQuery)**: reads only a few columns across billions of rows instead of whole rows → analytics/BI on huge datasets
-- **Wide-column (Cassandra, HBase)**: massive write throughput, linear horizontal scaling, tunable consistency → time-series, IoT, stock ticks
-- **Graph (Neo4j)**: traversing relationships *is* the query (friends-of-friends, shortest path) — joins this deep would be too expensive in relational → social graphs, recommendations, fraud rings
+- **Wide-column/Columnstore/Column-family  (Cassandra, HBase)**: massive write throughput, linear horizontal scaling, tunable consistency → time-series, IoT, stock ticks
+- **Columnar OLAP (ClickHouse)**: optimized for analytical queries and aggregations over large datasets with very high read performance
+- **Graph (Neo4j, Dgraph)**: traversing relationships *is* the primary query (friends-of-friends, shortest path) — joins this deep would be too expensive in relational → social graphs, recommendations, fraud rings
+- **Search-engine (Elasticsearch, Solr, algolia)**: analyzes documents and builds inverted indexes for full-text search and relevance-based querying
+- **Time Series/Time-Value (influxDb, prometheus)**: optimized for metrics and monitoring data indexed by timestamps, with efficient retention and aggregation over time
 
 ---
 
@@ -147,3 +150,28 @@ Note: real-time complicates horizontal scaling (sticky connections + need pub-su
 - **CDC (Change Data Capture)**: tail the source DB's write-ahead log/binlog to stream row-level inserts/updates/deletes, no polling load on source, captures deletes that polling misses → Debezium reading MySQL binlog into Kafka to keep a search index or cache in sync with the primary DB.                
 - **Polling extraction** (`SELECT WHERE updated_at > last_run`): simplest to build, no log access needed, but misses hard deletes and adds recurring query load to source → cron job syncing a small reference table.                                                                                            
   Combine in practice: CDC→stream for real-time sync + nightly batch for reconciliation/backfill is a common pairing (e.g. Debezium+Kafka feeding a lake, plus a daily full-table batch job to catch drift).
+
+## 16. Load Balancer (Algo)
+- **Random**
+- **Hash IP/URL/Path**: hashes the client IP/URL/Path address so that requests from the same client are consistently routed to the same backend
+- **Consistent Hashing**: like in reSharding. Maps requests to servers using a hash ring
+- **Round Robin**: sends requests to servers in a fixed circular order. Simple and fair
+- **Weighted Round Robin**: like Round Robin, but servers with higher weights receive more requests
+- **Least Connections (WebSocket, TCP, gRPC)**: routes the request to the server with the fewest active connections
+- **Weighted Least Connections**: like Least Connections, but takes server weights into account
+- **Least Response Time/Least Time**: chooses the server with the lowest observed response time
+- **Least Bandwidth**: sends traffic to the server currently using the least network bandwidth
+- **Least Requests**: selects the backend with the fewest in-flight requests
+- **Power of Two Choices/P2C**: randomly samples two servers and selects the less loaded one
+
+## 17. Distributed Coordination and Consensus
+- **Coordinator**: Orchestrates operations across multiple nodes or services
+- **Raft**: Consensus algorithm with a replicated log and leader election
+- **Paxos**: Consensus algorithm for agreeing on a single value or sequence of values
+- **Zab (ZooKeeper Atomic Broadcast)**: Consensus and coordination protocol used by ZooKeeper
+- **Gossip / SWIM**: Cluster membership, failure detection, and state dissemination
+- **Service Discovery (Consul, Eureka, Kubernetes, etcd)**: Discovers available service instances and their endpoints
+- **Leader Election**: Selects a single active leader among multiple nodes
+- **Distributed Lock (ZooKeeper, etcd, Redis)**: Provides mutual exclusion across distributed nodes
+- **Heartbeat/Lease**: Determines whether a node is alive and owns a temporary lease
+
