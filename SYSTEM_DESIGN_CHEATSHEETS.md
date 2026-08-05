@@ -11,11 +11,13 @@ Decision test: do you need joins/multi-row ACID across entities (→ relational)
 
 ## 2. NoSQL Database Types
 Pick by dominant access pattern — each trades relational flexibility (joins, ad hoc queries) for one specific strength.
-- **Document (MongoDB, Firestore)**: schema flexible/varies per record, nested data fetched in one read, no joins needed → user profiles, product catalogs
-- **Key-Value (Redis, DynamoDB)**: O(1) lookup by key, simplest model, fastest → caching, sessions
-- **Columnar (Redshift, BigQuery)**: reads only a few columns across billions of rows instead of whole rows → analytics/BI on huge datasets
+- **Document (MongoDB, Firestore, CouchDB)**: schema flexible/varies per record (JSON/BSON/XML), nested data fetched in a single read, no joins needed → user profiles, product catalogs
+- **Key-Value (Redis, DynamoDB, Memcached)**: O(1) lookup by key, simplest model, fastest → caching, sessions
+- **Columnar/OLAP (Redshift, BigQuery, ClickHouse)**: reads only the needed columns across billions of rows instead of whole rows, built for aggregations not single-row lookups → analytics/BI dashboards. Redshift/BigQuery are managed warehouses (zero ops, pay-per-query), ClickHouse can be self-hosted and trades ops burden for the fastest raw query speed.
 - **Wide-column (Cassandra, HBase)**: massive write throughput, linear horizontal scaling, tunable consistency → time-series, IoT, stock ticks
-- **Graph (Neo4j)**: traversing relationships *is* the query (friends-of-friends, shortest path) — joins this deep would be too expensive in relational → social graphs, recommendations, fraud rings
+- **Graph (Neo4j, Dgraph)**: traversing relationships *is* the query (friends-of-friends, shortest path) — joins this deep would be too expensive in relational → social graphs, recommendations, fraud rings
+- **Search (Elasticsearch, Solr, Algolia)**: inverted index built over documents for full-text/relevance-ranked search, not meant as a primary datastore → product search, log search (ELK stack)
+- **Time-Series (InfluxDB, Prometheus)**: optimized for timestamp-indexed writes with built-in retention/downsampling and aggregation over time windows → metrics/monitoring dashboards, sensor data
 
 ---
 
@@ -39,7 +41,18 @@ How reads/writes flow between app, cache, and DB — orthogonal to which backend
 
 ---
 
-## 5. Sync vs Async / Message Queues
+## 5. Cache Eviction
+Which entries to discard once the cache is full.
+- **LRU (Least Recently Used)**: evicts the item not accessed longest, needs access-order tracking → default general-purpose choice, Redis `allkeys-lru`.
+- **LFU (Least Frequently Used)**: evicts the lowest access count, better than LRU for a stable "hot set" but slower to adapt when popularity shifts → Redis `allkeys-lfu`, CDN caching of evergreen content.
+- **FIFO**: evicts the oldest inserted item regardless of usage, cheapest to implement but ignores actual access pattern → simple bounded queues/buffers.
+- **TTL/expiration**: entries expire after a fixed time regardless of usage, bounds staleness rather than memory → session tokens, rate-limit counters.
+- **Random**: evicts a random entry, O(1) with no bookkeeping, surprisingly competitive at scale → Redis `allkeys-random` under extreme memory pressure.
+  Combine in practice: TTL to cap staleness + LRU/LFU to cap memory is a common pairing (e.g. Redis `maxmemory-policy`).
+
+---
+
+## 6. Sync vs Async / Message Queues
 **Sync:** fast ops, need instant confirm/error handling, simple → login request/response.
 **Async:** slow ops (mins), traffic spikes, need reliability/decoupling → video transcoding job.
 - **Job queues** (RabbitMQ/SQS/Celery): discrete one-off tasks, priority support, flexible consumer scaling → sending emails, resizing uploaded images.
@@ -51,14 +64,14 @@ How reads/writes flow between app, cache, and DB — orthogonal to which backend
 
 ---
 
-## 6. REST vs gRPC
+## 7. REST vs gRPC
 **REST:** public APIs, many client languages, need caching/human-readable/debuggable.
 **gRPC:** internal service-to-service, high performance (protobuf+HTTP/2), streaming, strict typed contracts.
 Example: Stripe API=REST; Uber internal dispatch=gRPC.
 
 ---
 
-## 7. Do We Need Real-Time Communication?
+## 8. Do We Need Real-Time Communication?
 **Test:** if update arrives 10s late, does anything break?
 **Skip:** infrequent data, delay tolerable (dashboards, catalogs, email summaries).
 **Need it:** collaborative/chat (feels broken if delayed), safety/money alerts (fraud, live location), live time-sensitive data (stock, sports, auctions).
@@ -66,7 +79,7 @@ Note: real-time complicates horizontal scaling (sticky connections + need pub-su
 
 ---
 
-## 8. Real-Time Tech Choice
+## 9. Real-Time Tech Choice
 - **Polling**: simplest, wasteful (repeated empty requests), works anywhere → checking a background job's status.
 - **Long polling**: works through old firewalls/proxies, some latency/overhead per reconnect → legacy chat widgets.
 - **SSE**: one-way server→client, simple, auto-reconnect → stock ticker, live sports scores.
@@ -76,7 +89,7 @@ Note: real-time complicates horizontal scaling (sticky connections + need pub-su
 
 ---
 
-## 9. Sharding (across DB instances)
+## 10. Sharding (across DB instances)
 **Skip if:** single DB handles volume/throughput/working-set fine.
 **Need if:** data too big for one machine, write throughput maxed, working set exceeds memory.
 - **Hash-based**: even distribution, poor range queries → user profile lookups
@@ -86,7 +99,7 @@ Note: real-time complicates horizontal scaling (sticky connections + need pub-su
 
 ---
 
-## 10. Partitioning (within one DB)
+## 11. Partitioning (within one DB)
 **Skip if:** table is small/fast enough with indexing.
 **Need if:** table huge even with indexes, known access slice (recent data), slow maintenance ops.
 - **Range**: by date, enables pruning + easy old-data drop → orders/logs
@@ -96,7 +109,7 @@ Note: real-time complicates horizontal scaling (sticky connections + need pub-su
 
 ---
 
-## 11. Replication
+## 12. Replication
 **Skip if:** downtime tolerable (minutes), single server handles reads fine.
 **Need if:** HA required (seconds not minutes), read-heavy load exceeds one server.
 - **Primary-replica**: writes→primary, reads spread to replicas; async=lag risk → blogs/content sites
@@ -106,7 +119,20 @@ Note: real-time complicates horizontal scaling (sticky connections + need pub-su
 
 ---
 
-## 12. Rate Limiting
+## 13. Load Balancer (Algorithms)
+**Skip if:** single backend instance — nothing to balance across.
+**Need if:** traffic must be spread across multiple instances/servers.
+- **Round Robin**: fixed circular order, simple and fair when servers are equal capacity; weighted variant sends more traffic to higher-capacity servers → nginx default upstream strategy.
+- **Least Connections**: routes to the server with fewest active connections, beats round robin when connections are long-lived/uneven; weighted variant factors in server capacity → WebSocket/gRPC/DB connection pools.
+- **Hash-based (IP/URL/Path)**: hashes a request attribute so the same client/resource always lands on the same backend → sticky sessions without a shared session store.
+- **Consistent Hashing**: hashes onto a ring so only a fraction of keys remap when a node joins/leaves, unlike plain hashing which remaps almost everything → memcached client-side sharding, CDN request routing.
+- **Least Response Time**: picks the server with the lowest observed latency, adapts to real load better than raw connection count → mixed-hardware fleets.
+- **Least Bandwidth / Least Requests**: same idea as least-connections but keyed on bandwidth usage or in-flight request count — pick whichever metric best reflects your actual bottleneck → CDN edge nodes (bandwidth-bound), API gateways (request-bound).
+- **Random / Power of Two Choices**: random picks are O(1) with no state and hold up well at scale; P2C samples two servers and takes the less loaded one for better balance at near-zero extra cost → Envoy's default policy.
+
+---
+
+## 14. Rate Limiting
 **Skip if:** trusted low-traffic internal users, already limited upstream, early-stage/no abuse risk.
 **Need if:** public API, auth/login endpoints, expensive resource calls, multi-tenant tiers.
 - **Fixed window**: simple, boundary burst flaw (up to 2x limit at window edge) → basic public API tier limits
@@ -118,7 +144,7 @@ Note: real-time complicates horizontal scaling (sticky connections + need pub-su
 
 ---
 
-## 13. Distributed Transactions
+## 15. Distributed Transactions
 **Skip if:** everything touched lives in one DB — normal local transaction handles it → transfer between two accounts at the same bank.
 **Also skip if:** strict all-or-nothing isn't required — idempotent retries + background reconciliation is simpler than any formal pattern.
 **Need if:** operation spans multiple independently-owned services/DBs and needs all-or-nothing (or a guaranteed consistent end state).
@@ -130,7 +156,7 @@ Note: real-time complicates horizontal scaling (sticky connections + need pub-su
 
 ---
 
-## 14. Circuit Breakers
+## 16. Circuit Breakers
 **Skip if:** calling only fast/reliable/local resources.
 **Need if:** calling external service/DB/API that can slow down or fail, risking cascading failure.
 - **Closed**: normal traffic, watching failure rate
@@ -138,12 +164,50 @@ Note: real-time complicates horizontal scaling (sticky connections + need pub-su
 - **Half-open**: after cooldown, tests recovery with limited requests
   Configure: failure threshold, timeout definition, cooldown length, fallback (cache/default/queue/error). Implement via client library (Resilience4j, Polly) or service mesh (Istio) → Netflix Hystrix.
 
-## 15. Data Ingestion Pattern                                                                                                                                                                                                                                                                                    
-**Skip if:** source data small/infrequent, freshness in hours is fine, direct query against source is cheap enough.                                                                                                                                                                                              
-**Need if:** moving data from source systems into downstream stores/analytics/services regularly, at a scale or freshness direct querying can't handle.                                                                                                                                                          
-- **Batch**: scheduled bulk extract/load (hourly/nightly), simple, easy to reprocess/backfill, but staleness = interval length → nightly data warehouse ETL, payroll runs.                                                                                                                                       
-- **Micro-batch**: batch on short fixed windows (seconds–minutes), most of batch's simplicity with near-real-time freshness → Spark Structured Streaming windows, periodic feature-store refresh.                                                                                                                
-- **Streaming**: continuous event-by-event processing as data arrives, lowest latency, but adds operational complexity (state, ordering, backpressure, replay) → clickstream analytics, fraud detection.                                                                                                         
-- **CDC (Change Data Capture)**: tail the source DB's write-ahead log/binlog to stream row-level inserts/updates/deletes, no polling load on source, captures deletes that polling misses → Debezium reading MySQL binlog into Kafka to keep a search index or cache in sync with the primary DB.                
-- **Polling extraction** (`SELECT WHERE updated_at > last_run`): simplest to build, no log access needed, but misses hard deletes and adds recurring query load to source → cron job syncing a small reference table.                                                                                            
+---
+
+## 17. Data Ingestion Pattern
+**Skip if:** source data small/infrequent, freshness in hours is fine, direct query against source is cheap enough.
+**Need if:** moving data from source systems into downstream stores/analytics/services regularly, at a scale or freshness direct querying can't handle.
+- **Batch**: scheduled bulk extract/load (hourly/nightly), simple, easy to reprocess/backfill, but staleness = interval length → nightly data warehouse ETL, payroll runs.
+- **Micro-batch**: batch on short fixed windows (seconds–minutes), most of batch's simplicity with near-real-time freshness → Spark Structured Streaming windows, periodic feature-store refresh.
+- **Streaming**: continuous event-by-event processing as data arrives, lowest latency, but adds operational complexity (state, ordering, backpressure, replay) → clickstream analytics, fraud detection.
+- **CDC (Change Data Capture)**: tail the source DB's write-ahead log/binlog to stream row-level inserts/updates/deletes, no polling load on source, captures deletes that polling misses → Debezium reading MySQL binlog into Kafka to keep a search index or cache in sync with the primary DB.
+- **Polling extraction** (`SELECT WHERE updated_at > last_run`): simplest to build, no log access needed, but misses hard deletes and adds recurring query load to source → cron job syncing a small reference table.
   Combine in practice: CDC→stream for real-time sync + nightly batch for reconciliation/backfill is a common pairing (e.g. Debezium+Kafka feeding a lake, plus a daily full-table batch job to catch drift).
+
+---
+
+## 18. Consensus Algorithms
+**Skip if:** a single source of truth is acceptable (one DB, one leader with manual failover).
+**Need if:** multiple nodes must agree on shared state/leadership with no single trusted authority, and must keep working through node failures.
+- **Raft**: replicated log + elected leader, leader handles all writes and replicates them in order — easier to reason about/implement correctly than Paxos → etcd, Consul, CockroachDB, Kafka KRaft (controller quorum, replacing ZooKeeper).
+- **Paxos**: the original quorum-based consensus protocol for agreeing on a single value (chained as Multi-Paxos for a log) — more proven at scale but notoriously hard to implement correctly → Google Chubby, Spanner.
+- **Zab (ZooKeeper Atomic Broadcast)**: Raft-like replicated-log protocol purpose-built for ZooKeeper's primary-backup model → ZooKeeper itself.
+- **Gossip/SWIM**: peer-to-peer periodic state exchange for membership/failure detection, not consensus on a value — just an eventually-consistent view of the cluster → Cassandra/DynamoDB ring membership, Consul.
+
+---
+
+## 19. Distributed Coordination Primitives
+**Skip if:** a single process/DB can own the coordination state.
+**Need if:** multiple independent nodes need to safely share leadership, mutual exclusion, or a live registry of who's up.
+- **Leader Election**: exactly one node is elected active leader while others stand by, remaining nodes re-elect on failure → primary DB failover, Kafka controller election.
+- **Distributed Lock**: mutual exclusion across nodes via a coordination service, must be lease-based (auto-expiring) so a crashed holder can't block others forever → ZooKeeper/etcd locks, Redis Redlock around a critical section.
+- **Service Discovery**: registry of live service instances and their endpoints, so callers don't hardcode addresses → Consul/Eureka, Kubernetes DNS/etcd-backed discovery.
+- **Heartbeat/Lease**: nodes periodically renew a time-bound lease to prove liveness; a missed heartbeat expires the lease and the node is treated as dead → Kubernetes node health checks, Kafka consumer group liveness.
+  Usually built on top of a consensus system (§18) rather than implemented from scratch.
+
+---
+
+## 20. Microservice Patterns
+Cross-cutting patterns for structuring/operating a microservice fleet — see Saga (§15), Circuit Breakers (§16), CDC (§17) for concerns already covered elsewhere.
+- **API Gateway**: single entry point handling routing/auth/rate limiting for all clients, hides internal service topology → Netflix Zuul, Kong in front of a service mesh.
+- **Backend for Frontend (BFF)**: a gateway per client type (web/mobile) instead of one shared gateway, avoids over/under-fetching for different UIs → Netflix's per-device BFFs.
+- **Service Mesh / Sidecar**: a proxy deployed alongside each service instance handles retries/mTLS/observability, keeping that logic out of app code → Istio/Linkerd with Envoy sidecars.
+- **Database per Service**: each service owns its data exclusively, no shared schema/cross-service joins, enforces loose coupling — but cross-service operations then need Saga/eventual consistency → standard microservices baseline.
+- **Strangler Fig**: a new service intercepts and reimplements slices of a monolith's functionality behind a routing layer, monolith shrinks gradually → incremental legacy migrations (Shopify, GitHub).
+- **CQRS**: separate models/paths for writes (command) and reads (query), lets each scale/optimize independently, pairs well with event sourcing → read-heavy services with complex write validation, e.g. order management.
+- **Event Sourcing**: store state as an append-only log of events instead of current-state rows, current state = replay of events → audit-heavy domains, banking ledgers.
+- **Anti-Corruption Layer**: translation layer at a service boundary that prevents a legacy/external system's model from leaking into your domain model → integrating a third-party or legacy system without polluting your own schema.
+</content>
+</invoke>
